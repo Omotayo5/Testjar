@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["vitest/globals", "@hirosystems/clarinet-sdk/vitest-helpers/src/vitest", "@hirosystems/clarinet-sdk/vitest-helpers/src/global"]
+  },
+  "include": ["tests/**/*.ts", "setup.ts"],
+  "exclude": ["node_modules"]
+}
