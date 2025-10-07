@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { AppConfig, UserSession, showConnect } from '@stacks/connect';
+import { AppConfig, UserSession, showConnect, openContractCall } from '@stacks/connect';
 import {
-  makeContractCall,
   callReadOnlyFunction,
   standardPrincipalCV,
   uintCV,
@@ -35,28 +34,52 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Debug: Log state changes
+  console.log('App render - Current state:', {
+    userData: userData ? 'Connected' : 'Not connected',
+    recipientAddress,
+    tipAmount,
+    tipMessage
+  });
+
   useEffect(() => {
+    console.log('App mounting, checking user session...');
+    
     if (userSession.isSignInPending()) {
+      console.log('Sign-in pending, handling...');
       userSession.handlePendingSignIn().then((userData) => {
+        console.log('User signed in:', userData);
         setUserData(userData);
       });
     } else if (userSession.isUserSignedIn()) {
-      setUserData(userSession.loadUserData());
+      console.log('User already signed in');
+      const data = userSession.loadUserData();
+      console.log('Loaded user data:', data);
+      setUserData(data);
+    } else {
+      console.log('No user signed in');
     }
   }, []);
 
   const connectWallet = () => {
-    showConnect({
-      appDetails: {
-        name: 'TipsJar',
-        icon: window.location.origin + '/logo.png',
-      },
-      redirectTo: '/',
-      onFinish: () => {
-        setUserData(userSession.loadUserData());
-      },
-      userSession,
-    });
+    try {
+      showConnect({
+        appDetails: {
+          name: 'TipsJar',
+          icon: window.location.origin + '/favicon.ico',
+        },
+        onFinish: () => {
+          window.location.reload();
+        },
+        onCancel: () => {
+          console.log('User cancelled wallet connection');
+        },
+        userSession,
+      });
+    } catch (err) {
+      console.error('Wallet connection error:', err);
+      setError('Failed to open wallet connection. Please make sure your wallet extension is installed and enabled.');
+    }
   };
 
   const disconnectWallet = () => {
@@ -65,35 +88,64 @@ function App() {
   };
 
   const sendTip = async () => {
-    if (!recipientAddress || !tipAmount) {
+    // Clear any previous errors
+    setError('');
+
+    if (!userData) {
+      setError('Please connect your wallet first to send tips');
+      return;
+    }
+
+    // Trim inputs to remove whitespace
+    const recipient = recipientAddress?.trim();
+    const amount = tipAmount?.toString().trim();
+
+    console.log('Send Tip Debug:', { recipient, amount, recipientAddress, tipAmount });
+
+    if (!recipient || !amount) {
       setError('Please enter both recipient address and amount');
       return;
     }
 
+    if (parseFloat(amount) <= 0) {
+      setError('Amount must be greater than 0');
+      return;
+    }
+
     setLoading(true);
-    setError('');
 
     try {
       // Convert STX to microSTX (1 STX = 1,000,000 microSTX)
-      const amountInMicroSTX = Math.floor(parseFloat(tipAmount) * 1000000);
+      const amountInMicroSTX = Math.floor(parseFloat(amount) * 1000000);
 
+      console.log('Preparing transaction:', {
+        recipient,
+        stxAmount: amount,
+        microSTX: amountInMicroSTX,
+        message: tipMessage
+      });
+
+      // Prepare function arguments
       const functionArgs = [
-        standardPrincipalCV(recipientAddress),
+        standardPrincipalCV(recipient),
         uintCV(amountInMicroSTX),
         stringUtf8CV(tipMessage || ''),
       ];
 
+      console.log('Function args prepared:', functionArgs);
+
+      // Transaction options
       const txOptions = {
         contractAddress: CONTRACT_ADDRESS,
         contractName: CONTRACT_NAME,
         functionName: 'tip',
-        functionArgs,
+        functionArgs: functionArgs,
         network: NETWORK,
-        appDetails: {
-          name: 'TipsJar',
-          icon: window.location.origin + '/logo.png',
-        },
+        anchorMode: 1, // AnchorMode.Any
+        postConditionMode: 1, // PostConditionMode.Allow
         onFinish: (data) => {
+          console.log('Transaction finished:', data);
+          setLoading(false);
           setError('');
           alert(`Transaction broadcast! TX ID: ${data.txId}`);
           setRecipientAddress('');
@@ -101,14 +153,36 @@ function App() {
           setTipMessage('');
         },
         onCancel: () => {
+          console.log('Transaction cancelled by user');
+          setLoading(false);
           setError('Transaction cancelled');
         },
       };
 
-      await makeContractCall(txOptions);
+      console.log('Opening transaction popup with options:', txOptions);
+      await openContractCall(txOptions);
     } catch (err) {
-      setError(`Error: ${err.message}`);
-    } finally {
+      console.error('Transaction error:', err);
+      console.error('Error details:', {
+        message: err.message,
+        stack: err.stack,
+        error: err
+      });
+      
+      let errorMessage = 'Transaction failed';
+      
+      if (err.message) {
+        errorMessage = err.message;
+      } else if (err.toString) {
+        errorMessage = err.toString();
+      }
+      
+      // Check for specific error types
+      if (errorMessage.includes('map')) {
+        errorMessage = 'Wallet connection error. Please disconnect and reconnect your wallet, then try again.';
+      }
+      
+      setError(`Error: ${errorMessage}`);
       setLoading(false);
     }
   };
@@ -213,16 +287,48 @@ function App() {
       </header>
 
       <div className="container">
+        {/* Wallet Connection Section */}
+        <div className="wallet-section">
+          {!userData ? (
+            <div className="wallet-prompt">
+              <p>Connect your wallet to send tips</p>
+              <button className="btn btn-primary" onClick={connectWallet}>
+                🔐 Connect Wallet
+              </button>
+            </div>
+          ) : (
+            <div className="wallet-info">
+              <div className="wallet-address">
+                <span className="label">Connected:</span>
+                <strong className="address">
+                  {userData.profile.stxAddress.testnet || userData.profile.stxAddress.mainnet}
+                </strong>
+              </div>
+              <button className="btn btn-secondary btn-small" onClick={disconnectWallet}>
+                Disconnect
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Send Tip Section */}
         <div className="card">
           <h2>💸 Send Tip</h2>
+          {!userData && (
+            <div className="info-banner">
+              <span>ℹ️ Connect your wallet above to send tips</span>
+            </div>
+          )}
           <div className="form-group">
             <label>Recipient Address:</label>
             <input
               type="text"
               placeholder="ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM"
               value={recipientAddress}
-              onChange={(e) => setRecipientAddress(e.target.value)}
+              onChange={(e) => {
+                console.log('Recipient changed:', e.target.value);
+                setRecipientAddress(e.target.value);
+              }}
               className="input"
             />
           </div>
@@ -233,7 +339,10 @@ function App() {
               step="0.000001"
               placeholder="1.0"
               value={tipAmount}
-              onChange={(e) => setTipAmount(e.target.value)}
+              onChange={(e) => {
+                console.log('Amount changed:', e.target.value);
+                setTipAmount(e.target.value);
+              }}
               className="input"
             />
           </div>
